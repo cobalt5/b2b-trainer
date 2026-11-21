@@ -1,0 +1,67 @@
+{
+  "search": {
+    "rng": {
+      "mode": "seeded",
+      "seed": 1
+    },
+    "budget": {
+      "mode": "iterations_per_suggest",
+      "iterations": 4000
+    },
+    "threads": 1
+  },
+  "behaviors": {
+    "freestyle": {
+      "weights": {
+        "cell_coveredness": -0.17,
+        "max_cell_covered_height": 6,
+        "holes": -1.73,
+        "row_transitions": -0.05,
+        "height": -0.39,
+        "height_upper_half": -1.5,
+        "height_upper_quarter": -5.11,
+        "tetris_well_depth": 0.57,
+        "tslot": [
+          0.08,
+          1.6,
+          2.2,
+          4.07
+        ],
+        "has_back_to_back": 2.5,
+        "back_to_back_depth": 0.3,
+        "wasted_t": -1.52,
+        "softdrop": -0.03,
+        "normal_clears": [
+          0.0,
+          -4.0,
+          -3.5,
+          -3.0,
+          4.5
+        ],
+        "t_spin_clears": [
+          0.0,
+          1.0,
+          5.0,
+          4.5
+        ],
+        "t_spin_mini_clears": [
+          0.0,
+          0.5,
+          1.0,
+          1.0
+        ],
+        "allspin_clears": [
+          0.0,
+          2.0,
+          2.0,
+          1.5
+        ],
+        "back_to_back_clear": 3.0,
+        "combo_attack": 0.5,
+        "perfect_clear": 5.0,
+        "perfect_clear_override": false
+      },
+      "exploitation": 0.6931471805599453
+    }
+  }
+}

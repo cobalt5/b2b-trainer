@@ -1,0 +1,23 @@
+[
+  { "name": "TSD", "piece": "t", "rows": ["XXXX......", "XXX...XXXX", "XXXX.XXXXX"], "expect": { "lines": 2, "spin": "full", "label": "T-Spin Double", "b2b": "t-spin" } },
+  { "name": "TSS from a TSD slot", "piece": "t", "rows": ["XXXX......", "XXX...XXXX", "XXXX.XXXXX"], "expect": { "lines": 1, "spin": "full", "label": "T-Spin Single", "b2b": "t-spin" } },
+  { "name": "TST (left overhang)", "piece": "t", "rows": ["XX........", "X.........", "X.XXXXXXXX", "X..XXXXXXX", "X.XXXXXXXX"], "expect": { "lines": 3, "spin": "full", "label": "T-Spin Triple", "b2b": "t-spin" } },
+  { "name": "TST (centre slot)", "piece": "t", "rows": ["...XX.....", "....X.....", "XXX.XXXXXX", "XX..XXXXXX", "XXX.XXXXXX"], "expect": { "lines": 3, "spin": "full", "label": "T-Spin Triple", "b2b": "t-spin" } },
+  { "name": "TST (column 2)", "piece": "t", "rows": ["XXX.......", "XX........", "XX.XXXXXXX", "XX..XXXXXX", "XX.XXXXXXX"], "expect": { "lines": 3, "spin": "full", "label": "T-Spin Triple", "b2b": "t-spin" } },
+  { "name": "T-spin mini single (wall)", "piece": "t", "rows": [".XXXXXXXXX"], "expect": { "lines": 1, "spin": "mini", "label": "T-Spin Single Mini", "b2b": "t-spin-mini" } },
+  { "name": "T-spin mini from a TSD slot", "piece": "t", "rows": ["XXXX......", "XXX...XXXX", "XXXX.XXXXX"], "expect": { "lines": 1, "spin": "mini", "label": "T-Spin Single Mini", "b2b": "t-spin-mini" } },
+  { "name": "S-spin double mini", "piece": "s", "rows": ["X..XXXXXXX", "..XXXXXXXX"], "expect": { "lines": 2, "spin": "mini", "label": "S-Spin Double Mini", "b2b": "allspin-mini" } },
+  { "name": "Z-spin double mini", "piece": "z", "rows": ["XXXXXXX..X", "XXXXXXXX.."], "expect": { "lines": 2, "spin": "mini", "label": "Z-Spin Double Mini", "b2b": "allspin-mini" } },
+  { "name": "L-spin double mini", "piece": "l", "rows": ["XXXX......", "XX...XXXXX", "XX.XXXXXXX"], "expect": { "lines": 2, "spin": "mini", "label": "L-Spin Double Mini", "b2b": "allspin-mini" } },
+  { "name": "L-spin single mini", "piece": "l", "rows": ["XXXXX.....", "XXX...XXXX", "XXXXX.XXXX"], "expect": { "lines": 1, "spin": "mini", "label": "L-Spin Single Mini", "b2b": "allspin-mini" } },
+  { "name": "J-spin double mini", "piece": "j", "rows": ["......XXXX", "XXXXX...XX", "XXXXXXX.XX"], "expect": { "lines": 2, "spin": "mini", "label": "J-Spin Double Mini", "b2b": "allspin-mini" } },
+  { "name": "J-spin single mini", "piece": "j", "rows": [".....XXXXX", "XXXX...XXX", "XXXX.XXXXX"], "expect": { "lines": 1, "spin": "mini", "label": "J-Spin Single Mini", "b2b": "allspin-mini" } },
+  { "name": "I-spin single mini (col 1 entry)", "piece": "i", "rows": ["X.XXXXXXXX", "X....XXXXX"], "expect": { "lines": 1, "spin": "mini", "label": "I-Spin Single Mini", "b2b": "allspin-mini" } },
+  { "name": "I-spin single mini (col 4 shaft)", "piece": "i", "rows": ["XXXX.XXXXX", "XXXX.XXXXX", "X....XXXXX"], "expect": { "lines": 1, "spin": "mini", "label": "I-Spin Single Mini", "b2b": "allspin-mini" } },
+  { "name": "Quad (right well)", "piece": "i", "rows": ["XXXXXXXXX.", "XXXXXXXXX.", "XXXXXXXXX.", "XXXXXXXXX."], "expect": { "lines": 4, "spin": "none", "label": "Quad", "b2b": "quad" } },
+  { "name": "Quad (covered well)", "piece": "i", "rows": ["X.XXXXXXXX", "X.XXXXXXXX", "X.XXXXXXXX", "X.XXXXXXXX", "XX........"], "expect": { "lines": 4, "spin": "none", "label": "Quad", "b2b": "quad" } },
+  { "name": "Perfect clear (O double)", "piece": "o", "rows": ["XXXXXXXX..", "XXXXXXXX.."], "expect": { "lines": 2, "spin": "none", "label": "Double", "b2b": "perfect-clear" } },
+  { "name": "Plain double breaks B2B", "piece": "i", "rows": ["XXXXXXXXX.", "XXXXXXXXX."], "expect": { "lines": 2, "spin": "none", "label": "Double", "b2b": null } },
+  { "name": "Flat T single breaks B2B", "piece": "t", "rows": ["XXX...XXXX"], "expect": { "lines": 1, "spin": "none", "label": "Single", "b2b": null } },
+  { "name": "O double under overhang breaks B2B", "piece": "o", "rows": ["X..X......", "X..XXXXXXX", "X..XXXXXXX"], "expect": { "lines": 2, "spin": "none", "label": "Double", "b2b": null } }
+]

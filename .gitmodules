@@ -1,0 +1,3 @@
+[submodule "frostetra"]
+	path = frostetra
+	url = https://github.com/ruelalarcon/frostetra.git

@@ -1,0 +1,20 @@
+{
+  "name": "b2b-trainer",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "app",
+    "bridge"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n bridge,app -c blue,green \"npm run dev -w bridge\" \"npm run dev -w app\"",
+    "build": "npm run build -w app",
+    "build:bot": "cd frostetra && cargo build --release",
+    "test": "npm test -w app && npm test -w bridge",
+    "typecheck": "npm run typecheck -w app && npm run typecheck -w bridge"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7",
+    "typescript": "~5.9.3"
+  }
+}

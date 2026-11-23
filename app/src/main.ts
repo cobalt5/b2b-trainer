@@ -5,24 +5,26 @@
  * The hint key asks the bot (via the bridge) for plans up to the next B2B clear,
  * verifies them in Triangle, and outlines the best one on the mirror. Plans
  * come from the bot's B2B beam planner (M6) or its own line (M5); [ / ] cycle
- * through the top 3.
+ * through the top 3. M7: hint stats, auto-refresh after a followed step 1,
+ * pause while a hint is shown, and garbage practice.
  */
 
 import { lockLabels, type LockInfo } from "./game-core/clear";
-import { GameSession } from "./game-core/game";
+import { GameSession, type GarbageSettings } from "./game-core/game";
 import { InputHandler } from "./game-core/input";
 import { mirrorFromSnapshot, type MirrorState } from "./game-core/mirror";
 import { BOARD_HEIGHT, BOARD_WIDTH, PREVIEWS } from "./game-core/rules";
 import { BoardRenderer, ghostCells } from "./render/board";
 import { BotClient, type ClientStatus } from "./planner/bot-client";
 import { formatInputs, type HintStep } from "./planner/hint";
+import { HintStats } from "./planner/hint-stats";
 import { requestPlans, type PlanResult } from "./planner/plan";
 import { MismatchLog } from "./verify/mismatch-log";
 import { pieceCellsAt } from "./render/cells";
 import { OverlayRenderer } from "./render/overlay";
 import { PreviewRenderer } from "./render/preview";
-import { SettingsModal } from "./ui/settings-modal";
-import { ACTION_LABELS, SettingsStore, formatBinding, type Action, type AppAction } from "./ui/settings";
+import { SETTINGS_TABS, SettingsModal, type SettingsTab } from "./ui/settings-modal";
+import { ACTION_LABELS, SettingsStore, formatBinding, type Action, type AppAction, type Settings } from "./ui/settings";
 
 const BUFFER_ROWS_SHOWN = 3;
 
@@ -76,7 +78,8 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 // ------------------------------------------------------------ state
 
 const settings = new SettingsStore();
-const session = new GameSession(settings.value.handling, settings.value.practice.seed ?? undefined);
+const garbageOf = (s: Settings): GarbageSettings => ({ mode: s.practice.garbage, amount: s.practice.garbageAmount, interval: s.practice.garbageInterval });
+const session = new GameSession(settings.value.handling, settings.value.practice.seed ?? undefined, garbageOf(settings.value));
 
 const geo = { width: BOARD_WIDTH, visibleRows: BOARD_HEIGHT, bufferRows: BUFFER_ROWS_SHOWN };
 const play = new BoardRenderer($<HTMLCanvasElement>("play"), geo);
@@ -115,6 +118,24 @@ let planIndex = 0;
 /** Text under the mirror: thinking / errors / what the plan shows. */
 let hintNote = "";
 let hintBusy = false;
+const hintStats = new HintStats();
+/** The session was paused by "pause while shown" (not by the user). */
+let hintPaused = false;
+
+function pauseForHint(): void {
+  if (!settings.value.hint.pauseWhileShown || session.paused || session.over) return;
+  input.releaseAll();
+  session.setPaused(true);
+  hintPaused = true;
+  mirrorDirty = true;
+}
+
+function resumeFromHint(): void {
+  if (!hintPaused) return;
+  hintPaused = false;
+  session.setPaused(false);
+  mirrorDirty = true;
+}
 
 function setPlans(r: PlanResult | null, note = ""): void {
   planResult = r;
@@ -157,7 +178,8 @@ function cyclePlan(delta: number): void {
   mirrorDirty = true;
 }
 
-async function requestHint(): Promise<void> {
+/** `auto`: an auto-refresh after a followed step 1 (not counted as a hint used). */
+async function requestHint(auto = false): Promise<void> {
   if (hintBusy) return;
   if (!bot.ready) {
     const s = bot.status;
@@ -166,6 +188,8 @@ async function requestHint(): Promise<void> {
   }
   const m = mirrorState;
   hintBusy = true;
+  if (!auto) hintStats.hintUsed();
+  pauseForHint();
   setPlans(null, "Thinking…");
   try {
     const h = settings.value.hint;
@@ -180,8 +204,11 @@ async function requestHint(): Promise<void> {
     if (mirrorState.version !== m.version) return; // a piece locked meanwhile: stale
     setPlans(r);
     hintNote = describePlans(r);
+    if (m.incomingGarbage) hintNote += `\n${m.incomingGarbage} garbage incoming · the plan ignores it`;
+    if (!r.plans.length && !r.fallback) resumeFromHint();
   } catch (e) {
     if (mirrorState.version !== m.version) return;
+    resumeFromHint();
     setPlans(null, `Hint failed: ${(e as Error).message}`);
   } finally {
     hintBusy = false;
@@ -212,7 +239,11 @@ bot.connect();
 
 const input = new InputHandler(
   () => settings.value.keybinds,
-  (e) => session.keyEvent(e),
+  (e) => {
+    // Pause while shown: the first game key resumes play and still counts.
+    if (e.down && hintPaused && !modal.isOpen) resumeFromHint();
+    session.keyEvent(e);
+  },
   (a) => onAppAction(a)
 );
 input.attach();
@@ -233,6 +264,7 @@ const modal = new SettingsModal(settings, {
 
 function restart(): void {
   input.releaseAll();
+  hintStats.reset();
   session.restart(settings.value.practice.seed ?? undefined);
 }
 
@@ -250,6 +282,7 @@ function onAppAction(a: AppAction): void {
       return;
     case "pause":
       input.releaseAll();
+      if (hintPaused) return resumeFromHint();
       session.setPaused(!session.paused);
       return;
     case "openSettings":
@@ -300,9 +333,10 @@ if (import.meta.env.DEV) {
   }
 }
 
-// Deep link: #settings or #settings-controls opens the dialog on load.
+// Deep link: #settings or #settings-<tab> (controls, hints, practice) opens the dialog on load.
 if (location.hash.startsWith("#settings")) {
-  queueMicrotask(() => modal.open(location.hash === "#settings-controls" ? "controls" : "handling"));
+  const tab = location.hash.slice("#settings-".length) as SettingsTab;
+  queueMicrotask(() => modal.open(SETTINGS_TABS.includes(tab) ? tab : "handling"));
 }
 
 $("btn-restart").addEventListener("click", blurAfter(restart));
@@ -310,6 +344,7 @@ $("btn-settings").addEventListener("click", blurAfter(() => modal.open()));
 
 settings.subscribe((s) => {
   session.setHandling(s.handling);
+  session.setGarbage(garbageOf(s));
   mirrorDirty = true; // e.g. "show full plan" changed
   renderLegend();
 });
@@ -338,13 +373,20 @@ function flash(main: string, extras: string[] = []): void {
   labelTimer = window.setTimeout(() => label.classList.remove("show"), 1400);
 }
 
-session.onLock(({ info, snapshot }) => {
+session.onLock(({ info, snapshot, cells }) => {
+  // Stats: did this lock follow the step 1 shown for the position it was made from?
+  const step1 = planResult && planResult.version === mirrorState.version ? shownSteps().steps[0] : undefined;
+  const followed = step1 ? hintStats.lock(cells, step1.cells) : false;
+
   setMirror(mirrorFromSnapshot(snapshot, session.engine.initializer));
   // Hint lifetime: the plan is for the previous position. "off" keeps it up
-  // (marked stale); "clear" and "auto-refresh" drop it (auto-refresh lands in M7).
+  // (marked stale); "clear" drops it; "auto-refresh" asks again for the new
+  // position when the user followed step 1, and otherwise drops it.
   if (planResult || hintNote) {
-    if (settings.value.hint.lifetime === "off" && planResult) hintNote = "Hint is from an earlier position";
+    const lifetime = settings.value.hint.lifetime;
+    if (lifetime === "off" && planResult) hintNote = "Hint is from an earlier position";
     else setPlans(null);
+    if (lifetime === "auto-refresh" && followed && !info.topout) queueMicrotask(() => void requestHint(true));
   }
   const { main, extras } = lockLabels(info);
   if (main || extras.length) flash(main ?? extras.shift()!, extras);
@@ -353,6 +395,7 @@ session.onLock(({ info, snapshot }) => {
 
 session.onReset(() => {
   label.classList.remove("show");
+  resumeFromHint();
   setPlans(null);
   setMirror(mirrorFromSnapshot(session.engine.snapshot(), session.engine.initializer));
   $("seed").textContent = `seed ${session.seed}`;
@@ -416,14 +459,23 @@ function renderStats(): void {
   const e = session.engine;
   const charging = e.b2b.charging;
   const surge = charging && e.stats.b2b >= charging.at ? e.dynamicStats.surgePower : 0;
+  const hs = hintStats.value;
+  const rate = hintStats.matchRate;
   const rows: [string, string][] = [
     ["B2B", e.stats.b2b > 0 ? `×${e.stats.b2b}` : e.stats.b2b === 0 ? "ready" : "—"],
     ["Surge", surge > 0 ? String(surge) : "—"],
     ["Combo", e.stats.combo > 0 ? String(e.stats.combo) : "—"],
     ["Pieces", String(e.stats.pieces)],
     ["Lines", String(e.stats.lines)],
-    ["PPS", e.dynamicStats.pps.toFixed(2)]
+    ["PPS", e.dynamicStats.pps.toFixed(2)],
+    ["Hints", String(hs.hintsUsed)],
+    ["Step 1", rate === null ? "—" : `${Math.round(rate)}% (${hs.stepsMatched}/${hs.stepsShown})`]
   ];
+  const g = session.nextGarbageIn;
+  if (g !== null) {
+    const pending = session.pendingGarbage;
+    rows.push(["Garbage", pending ? `${pending} incoming` : `in ${Math.ceil(g)} s`]);
+  }
   const html = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   if (html !== lastStats) {
     statsEl.innerHTML = html;
@@ -432,7 +484,7 @@ function renderStats(): void {
 }
 
 function renderOverlay(): void {
-  const msg = session.over ? "Game over" : session.paused && !modal.isOpen ? "Paused" : "";
+  const msg = session.over ? "Game over" : session.paused && !modal.isOpen && !hintPaused ? "Paused" : "";
   overlay.hidden = !msg;
   if (msg) {
     const kb = settings.value.keybinds;
@@ -456,7 +508,7 @@ function renderMirror(): void {
     steps.map((st, i) => ({ cells: st.cells, mino: st.mino, n: i + 1, usesHold: st.usesHold, final: hasFinal && i === steps.length - 1 }))
   );
   $("m-hold-panel").classList.toggle("highlight", steps.some((st) => st.usesHold));
-  $("mirror-note").textContent = hintNote;
+  $("mirror-note").textContent = hintPaused && hintNote ? `${hintNote}\nPaused · any move key resumes` : hintNote;
   mirrorDirty = false;
 }
 
@@ -468,7 +520,7 @@ function frame(now: number): void {
     board: e.board.state,
     falling: session.over ? null : { mino: e.falling.symbol, cells },
     ghost: session.over ? null : ghostCells(e.board.state, cells),
-    dimmed: session.over || (session.paused && !modal.isOpen)
+    dimmed: session.over || (session.paused && !modal.isOpen && !hintPaused)
   });
   hold.draw([e.held], e.holdLocked);
   queue.draw(e.queue.slice(0, PREVIEWS));

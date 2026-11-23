@@ -111,7 +111,8 @@ export interface HintSettings {
   beamWidth: number;
 }
 
-export type GarbageMode = "off" | "clean" | "cheese";
+export type { GarbageMode } from "../game-core/rules";
+import type { GarbageMode } from "../game-core/rules";
 
 export interface PracticeSettings {
   /** null = random seed each restart. */

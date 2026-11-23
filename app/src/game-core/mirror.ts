@@ -14,9 +14,16 @@ export interface MirrorState {
   queue: Mino[];
   b2b: number;
   combo: number;
+  /** Garbage lines waiting to rise (garbage practice). The plan ignores them. */
+  incomingGarbage: number;
   /** Increments on every new mirror state, for staleness checks. */
   version: number;
-  /** Full engine state, so verify/ can rebuild this exact position in Triangle. */
+  /**
+   * Full engine state, so verify/ can rebuild this exact position in Triangle.
+   * Its garbage queue is emptied: the bot isn't told about incoming garbage,
+   * so plans are made (and verified) as if none arrives. Otherwise verify
+   * would tank it on step 1 and every later step would be shifted.
+   */
   snapshot: EngineSnapshot;
   initializer: EngineInitializeParams;
 }
@@ -24,6 +31,7 @@ export interface MirrorState {
 let versionCounter = 0;
 
 export function mirrorFromSnapshot(s: EngineSnapshot, initializer: EngineInitializeParams): MirrorState {
+  const incomingGarbage = s.garbage.queue.reduce((n, g) => n + g.amount, 0);
   return {
     board: s.board.map((row) => row.slice()),
     current: {
@@ -36,8 +44,9 @@ export function mirrorFromSnapshot(s: EngineSnapshot, initializer: EngineInitial
     queue: s.queue.value.slice(),
     b2b: s.stats.b2b,
     combo: s.stats.combo,
+    incomingGarbage,
     version: ++versionCounter,
-    snapshot: s,
+    snapshot: incomingGarbage ? { ...s, garbage: { ...s.garbage, queue: [] } } : s,
     initializer
   };
 }

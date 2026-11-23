@@ -224,6 +224,18 @@ dialog.settings h2 { margin: 0; font-size: 16px; }
 }
 .row-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 
+.form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(140px, 1fr);
+  gap: 12px 16px;
+  align-items: center;
+}
+.form .num, .form select {
+  font: inherit; padding: 4px 6px; max-width: 220px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
+}
+.form input[type="checkbox"] { justify-self: start; accent-color: var(--accent); }
+
 table.binds { width: 100%; border-collapse: collapse; table-layout: fixed; }
 table.binds th {
   text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
@@ -243,4 +255,5 @@ button.bind.capturing { border-color: var(--accent); color: var(--accent); anima
 @media (max-width: 720px) {
   .handling { grid-template-columns: 1fr 1fr; }
   .handling .readout { grid-column: span 2; margin-top: -6px; }
+  .form { grid-template-columns: 1fr; gap: 6px; }
 }

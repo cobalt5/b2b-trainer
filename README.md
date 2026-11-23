@@ -22,7 +22,9 @@ npm run build:bot             # cargo build --release in frostetra/
 | `npm run smoke -w bridge` | Verbose SBP handshake + one suggestion against Frostetra |
 | `npm run start -w bridge` | Bridge only. Env overrides: `BRIDGE_PORT`, `BOT_PATH`, `BOT_CONFIG` |
 
-Press **Tab** (rebindable) for a hint. The mirror board outlines the placements up to the next B2B-keeping clear, numbered in order. Press **[** / **]** to cycle through the top 3 plans. The header shows the bridge/bot status. Plans come from the bot's B2B beam planner (`settings.hint.strategy: "beam"`). The older principal-variation walk is still available as `"pv-walk"`.
+Press **Tab** (rebindable) for a hint. The mirror board outlines the placements up to the next B2B-keeping clear, numbered in order. Press **[** / **]** to cycle through the top 3 plans. The header shows the bridge/bot status. Plans come from the bot's B2B beam planner (`settings.hint.strategy: "beam"`). The older principal-variation walk is still available as "Bot line" in Settings → Hints.
+
+Settings (**F1**) also has hint options (clear, keep or auto-refresh after a lock; pause while shown; planner budget) and practice options (fixed seed; clean or cheese garbage every N seconds). The stats panel shows the B2B streak, Surge, hints used and how often your next piece matched hint step 1.
 
 ## Layout
 

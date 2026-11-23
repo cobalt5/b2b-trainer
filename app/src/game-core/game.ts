@@ -16,13 +16,25 @@ import type { Game as TetoGame } from "@haelp/teto/types";
 import { FRAME_MS, toEngineHandling, type HandlingSettings } from "../ui/settings";
 import { classifyLock, type LockInfo } from "./clear";
 import type { KeyEvent } from "./input";
-import { buildEngineParams, randomSeed } from "./rules";
+import { buildEngineParams, garbageMessiness, randomSeed, type GarbageMode } from "./rules";
+
+/** Garbage practice: `amount` lines arrive every `interval` seconds of play. */
+export interface GarbageSettings {
+  mode: GarbageMode;
+  amount: number;
+  /** Seconds of play (paused time doesn't count). */
+  interval: number;
+}
+
+export const NO_GARBAGE: GarbageSettings = { mode: "off", amount: 4, interval: 10 };
 
 export interface LockEvent {
   info: LockInfo;
   res: LockRes;
   /** Engine state right after the lock (next piece spawned). */
   snapshot: EngineSnapshot;
+  /** Cells the piece was placed on, absolute (x, y up), before lines cleared. */
+  cells: [number, number][];
 }
 
 type Listener<T> = (v: T) => void;
@@ -42,8 +54,14 @@ export class GameSession {
   #lockQueue: LockEvent[] = [];
   #lockListeners = new Set<Listener<LockEvent>>();
   #resetListeners = new Set<Listener<"restart" | "undo" | "redo">>();
+  #placed: [number, number][] = [];
+  #garbage: GarbageSettings;
+  /** Engine frame at which the next garbage event is sent (garbage practice). */
+  #nextGarbageFrame = 0;
+  #garbageId = 0;
 
-  constructor(private handling: HandlingSettings, seed?: number) {
+  constructor(private handling: HandlingSettings, seed?: number, garbage: GarbageSettings = NO_GARBAGE) {
+    this.#garbage = { ...garbage };
     this.restart(seed);
   }
 
@@ -51,8 +69,10 @@ export class GameSession {
 
   restart(seed: number = randomSeed()): void {
     this.seed = seed;
-    this.engine = new Engine(buildEngineParams(seed, toEngineHandling(this.handling)));
+    this.engine = new Engine(buildEngineParams(seed, toEngineHandling(this.handling), this.#garbage.mode));
     this.engine.events.on("falling.lock", (res) => this.#onLock(res));
+    this.#capturePlacements();
+    this.#scheduleGarbage();
     this.over = false;
     this.#pending = [];
     this.#lockQueue = [];
@@ -64,6 +84,7 @@ export class GameSession {
     if (this.engine.practice.undo.length === 0) return false;
     this.engine.undo();
     this.over = false;
+    this.#scheduleGarbage();
     this.#pending = [];
     this.#clockStarted = false;
     this.#emitReset("undo");
@@ -73,6 +94,7 @@ export class GameSession {
   redo(): boolean {
     if (this.engine.practice.redo.length === 0) return false;
     this.engine.redo();
+    this.#scheduleGarbage();
     this.#pending = [];
     this.#clockStarted = false;
     this.#emitReset("redo");
@@ -90,6 +112,29 @@ export class GameSession {
   setHandling(h: HandlingSettings): void {
     this.handling = h;
     this.engine.handling = toEngineHandling(h);
+  }
+
+  /** Live-apply garbage practice settings. A new interval starts counting now. */
+  setGarbage(g: GarbageSettings): void {
+    const prev = this.#garbage;
+    this.#garbage = { ...g };
+    this.#applyMessiness();
+    if (prev.mode !== g.mode || prev.interval !== g.interval) this.#scheduleGarbage();
+  }
+
+  get garbage(): Readonly<GarbageSettings> {
+    return this.#garbage;
+  }
+
+  /** Garbage lines received but not yet on the board. */
+  get pendingGarbage(): number {
+    return this.engine.garbageQueue.size;
+  }
+
+  /** Seconds of play until the next garbage event, or null with garbage off. */
+  get nextGarbageIn(): number | null {
+    if (this.#garbage.mode === "off") return null;
+    return Math.max(0, (this.#nextGarbageFrame - this.engine.frame) / 60);
   }
 
   get running(): boolean {
@@ -145,6 +190,49 @@ export class GameSession {
 
     this.engine.tick(frames);
     this.#flushLocks();
+    this.#maybeSendGarbage();
+  }
+
+  // ------------------------------------------------------------ garbage practice
+
+  #scheduleGarbage(): void {
+    this.#nextGarbageFrame = this.engine.frame + Math.round(this.#garbage.interval * 60);
+  }
+
+  #applyMessiness(): void {
+    // The queue keeps its own copy of the options; holes are rolled at tank time.
+    this.engine.garbageQueue.options.messiness = garbageMessiness(this.#garbage.mode);
+  }
+
+  /**
+   * Garbage enters the queue like an opponent's attack: it waits
+   * `garbage.speed` frames, can be cancelled by the player's own attack, and
+   * rises onto the board at the next lock that clears no lines (capped at 8
+   * lines per lock), as in TETR.IO.
+   */
+  #maybeSendGarbage(): void {
+    const g = this.#garbage;
+    if (g.mode === "off" || this.over || this.engine.frame < this.#nextGarbageFrame) return;
+    this.engine.receiveGarbage({
+      frame: this.engine.frame,
+      amount: g.amount,
+      size: 1,
+      cid: ++this.#garbageId,
+      gameid: 0,
+      confirmed: true
+    });
+    this.#nextGarbageFrame = this.engine.frame + Math.round(g.interval * 60);
+  }
+
+  /** Record the cells of each lock: Triangle's LockRes doesn't carry them. */
+  #capturePlacements(): void {
+    const board = this.engine.board;
+    const add = board.add.bind(board);
+    board.add = (...blocks) => {
+      // #lock places the falling piece with one add() call, before clearing lines.
+      this.#placed = blocks.map(([, x, y]) => [x, y]);
+      return add(...blocks);
+    };
   }
 
   // ------------------------------------------------------------ events
@@ -163,7 +251,8 @@ export class GameSession {
     // Runs synchronously inside engine.tick(), after line clears and the next
     // spawn, so the board is the post-lock board.
     const info = classifyLock(res, this.engine.board.state);
-    this.#lockQueue.push({ info, res, snapshot: this.engine.snapshot() });
+    this.#lockQueue.push({ info, res, snapshot: this.engine.snapshot(), cells: this.#placed });
+    this.#placed = [];
     if (info.topout) this.over = true;
   }
 

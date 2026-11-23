@@ -1,5 +1,5 @@
 /**
- * Settings dialog: handling (DAS/ARR/DCD/SDF…) and keybinds.
+ * Settings dialog: handling (DAS/ARR/DCD/SDF…), keybinds, hints and practice.
  * Every change is applied live through the SettingsStore.
  */
 
@@ -15,9 +15,52 @@ import {
   rebind,
   unbind,
   type Action,
+  type GarbageMode,
   type HandlingSettings,
+  type HintLifetime,
+  type HintSettings,
+  type PlanStrategy,
+  type PracticeSettings,
   type SettingsStore
 } from "./settings";
+
+export type SettingsTab = "handling" | "controls" | "hints" | "practice";
+export const SETTINGS_TABS: readonly SettingsTab[] = ["handling", "controls", "hints", "practice"];
+const TAB_LABELS: Record<SettingsTab, string> = { handling: "Handling", controls: "Controls", hints: "Hints", practice: "Practice" };
+
+/** One labelled row of the hints / practice forms. */
+function formRow(label: string, hint: string, control: HTMLElement, id: string): HTMLElement[] {
+  control.id = id;
+  return [el("label", { htmlFor: id, class: "h-label" }, label, el("small", { textContent: hint })), control];
+}
+
+function selectOf<T extends string>(options: readonly (readonly [T, string])[], value: T, onChange: (v: T) => void): HTMLSelectElement {
+  const s = el("select");
+  for (const [v, label] of options) s.append(el("option", { value: v, textContent: label, selected: v === value }));
+  s.addEventListener("change", () => onChange(s.value as T));
+  return s;
+}
+
+function checkboxOf(value: boolean, onChange: (v: boolean) => void): HTMLInputElement {
+  const c = el("input", { type: "checkbox", checked: value });
+  c.addEventListener("change", () => onChange(c.checked));
+  return c;
+}
+
+/** Number input that writes on change and shows the value the store kept (after clamping). */
+function numberOf(value: number, lim: { min: number; max: number; step: number }, onChange: (v: number) => number): HTMLInputElement {
+  const n = el("input", { type: "number", min: String(lim.min), max: String(lim.max), step: String(lim.step), value: String(value), class: "num" });
+  n.addEventListener("change", () => {
+    const v = Number(n.value);
+    if (n.value.trim() === "" || !Number.isFinite(v)) {
+      n.value = String(value);
+      return;
+    }
+    value = onChange(v);
+    n.value = String(value);
+  });
+  return n;
+}
 
 const SLOTS = 2;
 
@@ -47,7 +90,7 @@ function el<K extends keyof HTMLElementTagNameMap>(
 export class SettingsModal {
   readonly dialog: HTMLDialogElement;
   #body: HTMLElement;
-  #tab: "handling" | "controls" = "handling";
+  #tab: SettingsTab = "handling";
   #capture: { action: Action; slot: number; button: HTMLButtonElement } | null = null;
 
   constructor(
@@ -60,8 +103,8 @@ export class SettingsModal {
     this.#body = el("div", { class: "settings-body" });
 
     const tabs = el("nav", { class: "tabs" });
-    for (const [id, label] of [["handling", "Handling"], ["controls", "Controls"]] as const) {
-      const b = el("button", { type: "button", textContent: label, dataset: { tab: id } });
+    for (const id of SETTINGS_TABS) {
+      const b = el("button", { type: "button", textContent: TAB_LABELS[id], dataset: { tab: id } });
       b.addEventListener("click", () => {
         this.#tab = id;
         this.render();
@@ -98,7 +141,7 @@ export class SettingsModal {
     return this.dialog.open;
   }
 
-  open(tab?: "handling" | "controls"): void {
+  open(tab?: SettingsTab): void {
     if (tab) this.#tab = tab;
     this.render();
     this.hooks.onOpen();
@@ -114,7 +157,136 @@ export class SettingsModal {
     for (const b of this.dialog.querySelectorAll<HTMLButtonElement>(".tabs button")) {
       b.classList.toggle("active", b.dataset.tab === this.#tab);
     }
-    this.#body.replaceChildren(this.#tab === "handling" ? this.#renderHandling() : this.#renderControls());
+    const body = { handling: () => this.#renderHandling(), controls: () => this.#renderControls(), hints: () => this.#renderHints(), practice: () => this.#renderPractice() };
+    this.#body.replaceChildren(body[this.#tab]());
+  }
+
+  // ------------------------------------------------------------ hints
+
+  #setHint<K extends keyof HintSettings>(key: K, v: HintSettings[K]): HintSettings[K] {
+    this.store.update((s) => ({ ...s, hint: { ...s.hint, [key]: v } }));
+    return this.store.value.hint[key];
+  }
+
+  #renderHints(): HTMLElement {
+    const h = this.store.value.hint;
+    const form = el("div", { class: "form" });
+    const beam = h.strategy === "beam";
+
+    form.append(
+      ...formRow(
+        "After a lock",
+        "What happens to a shown hint when the next piece locks",
+        selectOf<HintLifetime>(
+          [
+            ["clear", "Clear it"],
+            ["auto-refresh", "Refresh if I followed step 1"],
+            ["off", "Keep it (marked stale)"]
+          ],
+          h.lifetime,
+          (v) => this.#setHint("lifetime", v)
+        ),
+        "set-lifetime"
+      ),
+      ...formRow("Show full plan", "Outline every step, or only step 1", checkboxOf(h.showFullPlan, (v) => this.#setHint("showFullPlan", v)), "set-fullplan"),
+      ...formRow(
+        "Pause while shown",
+        "Freeze the game while a hint is up. Any move key resumes",
+        checkboxOf(h.pauseWhileShown, (v) => this.#setHint("pauseWhileShown", v)),
+        "set-pausehint"
+      ),
+      ...formRow(
+        "Planner",
+        "Beam: B2B planner in the bot (best). Bot line: the bot's own line, cut at the next B2B clear",
+        selectOf<PlanStrategy>(
+          [
+            ["beam", "Beam search"],
+            ["pv-walk", "Bot line"]
+          ],
+          h.strategy,
+          (v) => {
+            this.#setHint("strategy", v);
+            this.render(); // swap the budget row
+          }
+        ),
+        "set-strategy"
+      ),
+      ...(beam
+        ? formRow("Beam width", "States kept per piece. Higher is slower and finds more (10–5000)", numberOf(h.beamWidth, { min: 10, max: 5000, step: 10 }, (v) => this.#setHint("beamWidth", v)), "set-beam")
+        : formRow(
+            "Search iterations",
+            "Bot search budget per hint. 4000 ≈ 280 ms p95 (100–1,000,000)",
+            numberOf(h.searchIterations, { min: 100, max: 1_000_000, step: 500 }, (v) => this.#setHint("searchIterations", v)),
+            "set-iters"
+          )),
+      ...formRow("Plans to cycle", "How many plans [ and ] cycle through (1–5)", numberOf(h.topN, { min: 1, max: 5, step: 1 }, (v) => this.#setHint("topN", v)), "set-topn")
+    );
+
+    const reset = el("button", { type: "button", class: "secondary", textContent: "Reset hints" });
+    reset.addEventListener("click", () => {
+      this.store.reset("hint");
+      this.render();
+    });
+    return el("div", {}, form, el("div", { class: "row-actions" }, reset));
+  }
+
+  // ------------------------------------------------------------ practice
+
+  #setPractice<K extends keyof PracticeSettings>(key: K, v: PracticeSettings[K]): PracticeSettings[K] {
+    this.store.update((s) => ({ ...s, practice: { ...s.practice, [key]: v } }));
+    return this.store.value.practice[key];
+  }
+
+  #renderPractice(): HTMLElement {
+    const p = this.store.value.practice;
+    const form = el("div", { class: "form" });
+
+    const seed = el("input", { type: "number", step: "1", min: "0", placeholder: "random", value: p.seed === null ? "" : String(p.seed), class: "num" });
+    seed.addEventListener("change", () => {
+      const raw = seed.value.trim();
+      const v = raw === "" ? null : Number(raw);
+      const kept = this.#setPractice("seed", v === null || !Number.isFinite(v) ? null : Math.max(0, Math.trunc(v)));
+      seed.value = kept === null ? "" : String(kept);
+    });
+
+    const garbageOff = p.garbage === "off";
+    form.append(
+      ...formRow("Seed", "Piece order for every restart. Empty = a new random seed each time. Applies on restart", seed, "set-seed"),
+      ...formRow(
+        "Garbage",
+        "Clean: one hole column per garbage event. Cheese: a different hole on every line",
+        selectOf<GarbageMode>(
+          [
+            ["off", "Off"],
+            ["clean", "Clean"],
+            ["cheese", "Cheese"]
+          ],
+          p.garbage,
+          (v) => {
+            this.#setPractice("garbage", v);
+            this.render();
+          }
+        ),
+        "set-garbage"
+      )
+    );
+    if (!garbageOff) {
+      form.append(
+        ...formRow("Lines per event", "Garbage lines sent each time (1–20). At most 8 rise per lock", numberOf(p.garbageAmount, { min: 1, max: 20, step: 1 }, (v) => this.#setPractice("garbageAmount", v)), "set-gamount"),
+        ...formRow("Every (seconds)", "Seconds of play between garbage events (1–120)", numberOf(p.garbageInterval, { min: 1, max: 120, step: 1 }, (v) => this.#setPractice("garbageInterval", v)), "set-ginterval")
+      );
+    }
+
+    const note = el("p", {
+      class: "muted small",
+      textContent: "Garbage waits a moment, can be cancelled by your own attack, and rises at the next lock that clears no lines, as in TETR.IO. Hints plan as if no more garbage arrives."
+    });
+    const reset = el("button", { type: "button", class: "secondary", textContent: "Reset practice" });
+    reset.addEventListener("click", () => {
+      this.store.reset("practice");
+      this.render();
+    });
+    return el("div", {}, form, garbageOff ? "" : note, el("div", { class: "row-actions" }, reset));
   }
 
   // ------------------------------------------------------------ handling

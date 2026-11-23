@@ -162,5 +162,28 @@ Module `frostetra/src/bot/behavior/b2b_plan/`. It runs in `Bot::suggest`, becaus
 
 ### App
 
-- `settings.hint.strategy` defaults to `"beam"`, and `settings.hint.beamWidth` is 300 (clamped 10–5000). Profiles saved before M6 have no `beamWidth`. Their `"pv-walk"` was only the old default, since there was no UI for it, so they move to `"beam"`. Neither setting has a control in the modal yet (M7).
+- `settings.hint.strategy` defaults to `"beam"`, and `settings.hint.beamWidth` is 300 (clamped 10–5000). Profiles saved before M6 have no `beamWidth`. Their `"pv-walk"` was only the old default, since there was no UI for it, so they move to `"beam"`. Both have controls in the Hints tab since M7.
 - Every beam plan is replayed through `walkLine`. A plan that doesn't verify as a B2B finish is dropped, counted in `rejected` and logged (`plan-outcome` or the verify reason).
+
+## 8. Polish (M7)
+
+### Settings
+
+The dialog has four tabs: Handling, Controls, **Hints** (after-lock behavior, full plan or step 1, pause while shown, planner, beam width or search iterations, plans to cycle) and **Practice** (seed, garbage mode, lines per event, interval). Deep links: `#settings-hints`, `#settings-practice`. The seed applies on the next restart; everything else applies live.
+
+### Hint lifetime and stats
+
+- Triangle's `LockRes` has no cells, so `GameSession` wraps its engine's `board.add` (called once per lock, before lines clear) and puts the placed cells on every `LockEvent` as `cells`.
+- A lock counts toward "Step 1" only if a hint for that exact mirror version is on screen. It matches when its cells equal the shown plan's step 1 (the plan picked with `[` / `]`, or the fallback move). `planner/hint-stats.ts`.
+- `auto-refresh`: after a matched step 1, the app requests a new hint for the new position (not counted in "Hints"). Otherwise the hint is cleared.
+- `pauseWhileShown`: pressing the hint key pauses the session from "Thinking…" onward. The first game keydown resumes and is still delivered, so the move counts. The pause key also resumes. Restart, undo and redo clear it.
+
+### Garbage practice
+
+- `GameSession.setGarbage({mode, amount, interval})` sends `amount` lines with `engine.receiveGarbage()` every `interval` seconds of engine frames, so paused time doesn't count. The garbage behaves as an opponent's attack does in Triangle: 20-frame travel time, cancelled by the player's attack, rises at the next non-clearing lock, at most 8 lines per lock (`cap.value`).
+- Holes come from the queue's `messiness` (`rules.ts::garbageMessiness`): clean = `within 0, change 1` (one column per event), cheese = `within 1, nosame` (a new column every line). The session writes it onto `engine.garbageQueue.options` so mode changes apply live.
+- Planning ignores incoming garbage. The bot isn't sent `incoming_garbage`, and `mirrorFromSnapshot` empties the snapshot's garbage queue, because otherwise verify would tank it on step 1 and shift every later step. The mirror keeps the count (`incomingGarbage`) and the hint note says the plan ignores it.
+
+### Not done
+
+Tauri packaging (optional in Design_Doc §9) is not started. The app still needs `npm run dev` (bridge + Vite).

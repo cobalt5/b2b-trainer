@@ -15,7 +15,21 @@ export function randomSeed(): number {
   return Math.floor(Math.random() * 2 ** 31);
 }
 
-export function buildEngineParams(seed: number, handling: Game.Handling): EngineInitializeParams {
+export type GarbageMode = "off" | "clean" | "cheese";
+
+/**
+ * Garbage hole placement (Triangle's GarbageQueue messiness):
+ * - clean: every line of a garbage event shares one hole column, and the
+ *   column changes between events;
+ * - cheese: every line gets its own hole column, never the same as the line below.
+ */
+export function garbageMessiness(mode: GarbageMode): EngineInitializeParams["garbage"]["messiness"] {
+  return mode === "cheese"
+    ? { change: 1, within: 1, nosame: true, timeout: 0, center: false }
+    : { change: 1, within: 0, nosame: true, timeout: 0, center: false };
+}
+
+export function buildEngineParams(seed: number, handling: Game.Handling, garbage: GarbageMode = "off"): EngineInitializeParams {
   return {
     board: { width: BOARD_WIDTH, height: BOARD_HEIGHT, buffer: BOARD_BUFFER },
     kickTable: "SRS+",
@@ -30,7 +44,7 @@ export function buildEngineParams(seed: number, handling: Game.Handling): Engine
     queue: { seed, type: "7-bag", minLength: 10 },
     garbage: {
       cap: { value: 8, marginTime: 0, increase: 0, absolute: 0, max: 40 },
-      messiness: { change: 1, within: 0, nosame: false, timeout: 0, center: false },
+      messiness: garbageMessiness(garbage),
       garbage: { speed: 20, holeSize: 1 },
       multiplier: { value: 1, increase: 0.008, marginTime: 10800 },
       bombs: false,

@@ -118,6 +118,8 @@ let planIndex = 0;
 /** Text under the mirror: thinking / errors / what the plan shows. */
 let hintNote = "";
 let hintBusy = false;
+/** Bumped to drop an in-flight hint request (hidden by a second press). */
+let hintRequest = 0;
 const hintStats = new HintStats();
 /** The session was paused by "pause while shown" (not by the user). */
 let hintPaused = false;
@@ -178,6 +180,18 @@ function cyclePlan(delta: number): void {
   mirrorDirty = true;
 }
 
+/** The hint key toggles: a shown (or pending) hint is hidden, otherwise one is requested. */
+function toggleHint(): void {
+  if (planResult || hintBusy) {
+    hintRequest++;
+    hintBusy = false;
+    resumeFromHint();
+    setPlans(null);
+    return;
+  }
+  void requestHint();
+}
+
 /** `auto`: an auto-refresh after a followed step 1 (not counted as a hint used). */
 async function requestHint(auto = false): Promise<void> {
   if (hintBusy) return;
@@ -187,6 +201,7 @@ async function requestHint(auto = false): Promise<void> {
     return;
   }
   const m = mirrorState;
+  const id = ++hintRequest;
   hintBusy = true;
   if (!auto) hintStats.hintUsed();
   pauseForHint();
@@ -201,17 +216,17 @@ async function requestHint(auto = false): Promise<void> {
       iterations: h.searchIterations,
       log: mismatches
     });
-    if (mirrorState.version !== m.version) return; // a piece locked meanwhile: stale
+    if (mirrorState.version !== m.version || id !== hintRequest) return; // a piece locked or the hint was hidden meanwhile
     setPlans(r);
     hintNote = describePlans(r);
     if (m.incomingGarbage) hintNote += `\n${m.incomingGarbage} garbage incoming · the plan ignores it`;
     if (!r.plans.length && !r.fallback) resumeFromHint();
   } catch (e) {
-    if (mirrorState.version !== m.version) return;
+    if (mirrorState.version !== m.version || id !== hintRequest) return;
     resumeFromHint();
     setPlans(null, `Hint failed: ${(e as Error).message}`);
   } finally {
-    hintBusy = false;
+    if (id === hintRequest) hintBusy = false;
   }
 }
 
@@ -289,7 +304,7 @@ function onAppAction(a: AppAction): void {
       modal.open();
       return;
     case "hint":
-      void requestHint();
+      toggleHint();
       return;
     case "prevPlan":
       cyclePlan(-1);

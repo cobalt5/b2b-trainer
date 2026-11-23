@@ -7,8 +7,13 @@
  * come from the bot's B2B beam planner (M6) or its own line (M5); [ / ] cycle
  * through the top 3. M7: hint stats, auto-refresh after a followed step 1,
  * pause while a hint is shown, and garbage practice.
+ * M8: spin drills: generated positions that end in a spin of a chosen piece,
+ * with the generated solution as the hint.
  */
 
+import { DrillController, type DrillResult } from "./drill/drill";
+import { DrillFeed } from "./drill/feed";
+import type { Scenario } from "./drill/scenario";
 import { lockLabels, type LockInfo } from "./game-core/clear";
 import { GameSession, type GarbageSettings } from "./game-core/game";
 import { InputHandler } from "./game-core/input";
@@ -20,6 +25,8 @@ import { formatInputs, type HintStep } from "./planner/hint";
 import { HintStats } from "./planner/hint-stats";
 import { requestPlans, type PlanResult } from "./planner/plan";
 import { MismatchLog } from "./verify/mismatch-log";
+import { engineFrom } from "./verify/verify";
+import { DrillBar } from "./ui/drill-bar";
 import { pieceCellsAt } from "./render/cells";
 import { OverlayRenderer } from "./render/overlay";
 import { PreviewRenderer } from "./render/preview";
@@ -34,12 +41,17 @@ const app = document.querySelector<HTMLElement>("#app")!;
 app.innerHTML = `
   <header class="top">
     <h1>B2B Trainer</h1>
+    <div class="seg mode-switch" role="group" aria-label="Mode">
+      <button type="button" id="mode-free">Free play</button>
+      <button type="button" id="mode-drill">Spin drills</button>
+    </div>
     <span class="seed muted" id="seed"></span>
     <div class="spacer"></div>
     <span class="bot-status" id="bot-status" role="status"></span>
     <button type="button" id="btn-restart" class="secondary">Restart</button>
     <button type="button" id="btn-settings">Settings</button>
   </header>
+  <div class="drill-bar" id="drill-bar" hidden></div>
   <div class="stage">
     <section class="playfield" aria-label="Play">
       <aside class="side left">
@@ -89,6 +101,16 @@ const queue = new PreviewRenderer($<HTMLCanvasElement>("queue"), { slots: PREVIE
 const mHold = new PreviewRenderer($<HTMLCanvasElement>("m-hold"), { slots: 1, cell: 18 });
 const mQueue = new PreviewRenderer($<HTMLCanvasElement>("m-queue"), { slots: PREVIEWS, cell: 18 });
 const planOverlay = new OverlayRenderer($<HTMLCanvasElement>("plan"), mirror);
+
+/** Spin drills (M8): grading, the drill generator, and loading state. */
+const drill = new DrillController();
+const feed = new DrillFeed();
+/** A drill is being generated (the session is paused meanwhile). */
+let drillLoading = false;
+let drillError = "";
+/** Bumped to drop an in-flight drill request. */
+let drillRequest = 0;
+let advanceTimer = 0;
 
 /** Mirror state: refreshed on every lock and on restart / undo / redo. */
 let mirrorState: MirrorState = mirrorFromSnapshot(session.engine.snapshot(), session.engine.initializer);
@@ -182,6 +204,7 @@ function cyclePlan(delta: number): void {
 
 /** The hint key toggles: a shown (or pending) hint is hidden, otherwise one is requested. */
 function toggleHint(): void {
+  if (inDrill()) return toggleDrillHint();
   if (planResult || hintBusy) {
     hintRequest++;
     hintBusy = false;
@@ -273,11 +296,13 @@ const modal = new SettingsModal(settings, {
   },
   onClose: () => {
     input.enabled = true;
-    session.setPaused(pausedBeforeModal);
+    // A finished or loading drill stays paused whatever changed meanwhile.
+    session.setPaused(pausedBeforeModal || (inDrill() && (drillLoading || drill.status !== "playing")));
   }
 });
 
 function restart(): void {
+  if (inDrill()) return retryDrill();
   input.releaseAll();
   hintStats.reset();
   session.restart(settings.value.practice.seed ?? undefined);
@@ -289,14 +314,18 @@ function onAppAction(a: AppAction): void {
       return restart();
     case "undo":
       input.releaseAll();
+      // Drills: undo within a running drill only; the lock count follows.
+      if (inDrill() && (drillLoading || drill.status !== "playing" || !drill.undo())) return;
       session.undo();
       return;
     case "redo":
       input.releaseAll();
+      if (inDrill()) return; // a redo replays a lock without a lock event; drills can't grade it
       session.redo();
       return;
     case "pause":
       input.releaseAll();
+      if (inDrill() && (drillLoading || drill.status !== "playing")) return;
       if (hintPaused) return resumeFromHint();
       session.setPaused(!session.paused);
       return;
@@ -311,6 +340,12 @@ function onAppAction(a: AppAction): void {
       return;
     case "nextPlan":
       cyclePlan(1);
+      return;
+    case "nextDrill":
+      if (inDrill()) void loadNextDrill();
+      return;
+    case "toggleMode":
+      setMode(inDrill() ? "free" : "drill");
       return;
   }
 }
@@ -357,11 +392,29 @@ if (location.hash.startsWith("#settings")) {
 $("btn-restart").addEventListener("click", blurAfter(restart));
 $("btn-settings").addEventListener("click", blurAfter(() => modal.open()));
 
+let lastMode = settings.value.mode;
+let lastDrill = settings.value.drill;
 settings.subscribe((s) => {
   session.setHandling(s.handling);
   session.setGarbage(garbageOf(s));
   mirrorDirty = true; // e.g. "show full plan" changed
   renderLegend();
+  if (s.mode !== lastMode) {
+    lastMode = s.mode;
+    lastDrill = s.drill;
+    applyMode();
+    return;
+  }
+  const prev = lastDrill;
+  lastDrill = s.drill;
+  if (s.mode !== "drill") return;
+  const d = s.drill;
+  if (d.piece !== prev.piece || d.depth !== prev.depth || d.maxGarbageRows !== prev.maxGarbageRows || d.seed !== prev.seed) {
+    feed.discard();
+    void loadNextDrill();
+  } else if (d.gravity !== prev.gravity) {
+    retryDrill();
+  }
 });
 
 // ------------------------------------------------------------ lock feedback
@@ -389,6 +442,7 @@ function flash(main: string, extras: string[] = []): void {
 }
 
 session.onLock(({ info, snapshot, cells }) => {
+  if (inDrill() && session.inScenario) return onDrillLock(info, snapshot, cells);
   // Stats: did this lock follow the step 1 shown for the position it was made from?
   const step1 = planResult && planResult.version === mirrorState.version ? shownSteps().steps[0] : undefined;
   const followed = step1 ? hintStats.lock(cells, step1.cells) : false;
@@ -413,9 +467,13 @@ session.onReset(() => {
   resumeFromHint();
   setPlans(null);
   setMirror(mirrorFromSnapshot(session.engine.snapshot(), session.engine.initializer));
-  $("seed").textContent = `seed ${session.seed}`;
+  renderSeed();
 });
-$("seed").textContent = `seed ${session.seed}`;
+
+function renderSeed(): void {
+  $("seed").textContent = inDrill() ? (drill.scenario ? `drill · ${drill.scenario.name}` : "") : `seed ${session.seed}`;
+}
+renderSeed();
 
 // ------------------------------------------------------------ layout
 
@@ -426,7 +484,8 @@ const PLAYFIELD_CHROME = 2 * 22 + 2 * 12;
 
 function layout(): void {
   const W = window.innerWidth;
-  const byH = Math.floor((window.innerHeight - 56 - 40 - 48) / (BOARD_HEIGHT + BUFFER_ROWS_SHOWN + 1));
+  const barH = document.body.classList.contains("drill-mode") ? 44 : 0;
+  const byH = Math.floor((window.innerHeight - 56 - barH - 40 - 48) / (BOARD_HEIGHT + BUFFER_ROWS_SHOWN + 1));
   const byW = Math.floor((W - 32 - 32 - 2 * PLAYFIELD_CHROME) / (2 * PLAYFIELD_CELLS));
   let cell = Math.min(34, byH, byW);
   const stacked = cell < 18;
@@ -456,13 +515,15 @@ const statsEl = $("stats");
 
 function renderLegend(): void {
   const kb = settings.value.keybinds;
-  const show: Action[] = ["moveLeft", "moveRight", "softDrop", "hardDrop", "rotateCCW", "rotateCW", "rotate180", "hold", "hint", "undo", "restart", "pause", "openSettings"];
+  const show: Action[] = inDrill()
+    ? ["moveLeft", "moveRight", "softDrop", "hardDrop", "rotateCCW", "rotateCW", "rotate180", "hold", "hint", "undo", "restart", "nextDrill", "toggleMode", "openSettings"]
+    : ["moveLeft", "moveRight", "softDrop", "hardDrop", "rotateCCW", "rotateCW", "rotate180", "hold", "hint", "undo", "restart", "pause", "toggleMode", "openSettings"];
   $("legend").replaceChildren(
     ...show.map((a) => {
       const s = document.createElement("span");
       const k = document.createElement("kbd");
       k.textContent = kb[a][0] ? formatBinding(kb[a][0]!) : "—";
-      s.append(k, ` ${ACTION_LABELS[a]}`);
+      s.append(k, ` ${a === "restart" && inDrill() ? "Retry" : ACTION_LABELS[a]}`);
       return s;
     })
   );
@@ -472,6 +533,7 @@ renderLegend();
 let lastStats = "";
 function renderStats(): void {
   const e = session.engine;
+  if (inDrill()) return renderDrillStats();
   const charging = e.b2b.charging;
   const surge = charging && e.stats.b2b >= charging.at ? e.dynamicStats.surgePower : 0;
   const hs = hintStats.value;
@@ -499,6 +561,7 @@ function renderStats(): void {
 }
 
 function renderOverlay(): void {
+  if (inDrill() && (drillLoading || drillError || drill.result)) return renderDrillOverlay();
   const msg = session.over ? "Game over" : session.paused && !modal.isOpen && !hintPaused ? "Paused" : "";
   overlay.hidden = !msg;
   if (msg) {
@@ -527,6 +590,224 @@ function renderMirror(): void {
   mirrorDirty = false;
 }
 
+// ------------------------------------------------------------ spin drills
+
+const drillBar = new DrillBar($("drill-bar"), {
+  onPiece: (piece) => settings.update((s) => ({ ...s, drill: { ...s.drill, piece } })),
+  onDepth: (depth) => settings.update((s) => ({ ...s, drill: { ...s.drill, depth } })),
+  onRetry: () => retryDrill(),
+  onNext: () => void loadNextDrill()
+});
+function inDrill(): boolean {
+  return settings.value.mode === "drill";
+}
+
+function setMode(mode: Settings["mode"]): void {
+  settings.update((s) => ({ ...s, mode }));
+}
+
+/** Switch the page between free play and drills (after settings.mode changed). */
+function applyMode(): void {
+  const on = inDrill();
+  document.body.classList.toggle("drill-mode", on);
+  $("drill-bar").hidden = !on;
+  $("mode-free").classList.toggle("active", !on);
+  $("mode-drill").classList.toggle("active", on);
+  $("mode-free").setAttribute("aria-pressed", String(!on));
+  $("mode-drill").setAttribute("aria-pressed", String(on));
+  $("btn-restart").hidden = on; // the drill bar has its own Retry
+  layout();
+  clearTimeout(advanceTimer);
+  input.releaseAll();
+  resumeFromHint();
+  setPlans(null);
+  renderLegend();
+  if (on) {
+    void loadNextDrill();
+  } else {
+    drillRequest++;
+    drillLoading = false;
+    drillError = "";
+    drill.scenario = null;
+    drill.retry();
+    session.setPaused(false);
+    hintStats.reset();
+    session.restart(settings.value.practice.seed ?? undefined);
+  }
+  renderSeed();
+}
+
+async function loadNextDrill(): Promise<void> {
+  clearTimeout(advanceTimer);
+  const d = settings.value.drill;
+  const id = ++drillRequest;
+  drillLoading = true;
+  drillError = "";
+  input.releaseAll();
+  resumeFromHint();
+  setPlans(null);
+  session.setPaused(true);
+  const s = await feed.next({ piece: d.piece, depth: d.depth, maxGarbageRows: d.maxGarbageRows, seed: d.seed });
+  if (id !== drillRequest || !inDrill()) return;
+  drillLoading = false;
+  if (!s) {
+    drillError = "Couldn't build a drill for these options";
+    return;
+  }
+  startDrill(s);
+}
+
+function startDrill(s: Scenario): void {
+  input.releaseAll();
+  drill.load(s);
+  session.loadScenario(s, { gravity: settings.value.drill.gravity });
+  session.setPaused(modal.isOpen);
+  renderSeed();
+}
+
+/** Back to the start of the current drill. */
+function retryDrill(): void {
+  const s = drill.scenario;
+  if (!s || drillLoading) return;
+  clearTimeout(advanceTimer);
+  drill.retry();
+  startDrill(s);
+}
+
+/** The steps still ahead on the generated line, as a plan the overlay can draw. */
+function solutionPlan(steps: HintStep[]): PlanResult {
+  return { version: mirrorState.version, plans: [{ steps, final: steps.at(-1)!.info, score: 0 }], fallback: null, botMs: 0, verifyMs: 0, rejected: 0 };
+}
+
+function describeSolution(steps: HintStep[]): string {
+  const n = steps.length;
+  const fin = lockLabels(steps.at(-1)!.info).main ?? "";
+  const first = steps[0]!;
+  return `Solution · ${n} piece${n > 1 ? "s" : ""} → ${fin}\nStep 1: ${formatInputs(first.inputs)}`;
+}
+
+function showSolution(): boolean {
+  const steps = drill.remainingSolution();
+  if (!steps?.length) return false;
+  pauseForHint();
+  setPlans(solutionPlan(steps), describeSolution(steps));
+  return true;
+}
+
+/** Drills: the hint is the generated solution (no bot needed). */
+function toggleDrillHint(): void {
+  if (drillLoading || !drill.scenario) return;
+  if (planResult) {
+    resumeFromHint();
+    setPlans(null);
+    return;
+  }
+  // After a drill ends, the hint key replays it with the solution shown.
+  if (drill.status !== "playing") retryDrill();
+  drill.hintUsed();
+  if (!showSolution()) {
+    const key = settings.value.keybinds.restart[0];
+    setPlans(null, `You left the generated line.${key ? ` Retry (${formatBinding(key)}) to see the solution.` : ""}`);
+  }
+}
+
+function onDrillLock(info: LockInfo, snapshot: Parameters<typeof mirrorFromSnapshot>[0], cells: [number, number][]): void {
+  const before = mirrorState;
+  const result = drill.onLock({ info, cells, before: () => engineFrom(before.initializer, before.snapshot) });
+  setMirror(mirrorFromSnapshot(snapshot, session.engine.initializer));
+
+  // Hint lifetime, as in free play: "auto-refresh" moves on to the rest of
+  // the line while the user follows it.
+  if (planResult || hintNote) {
+    const lifetime = settings.value.hint.lifetime;
+    if (lifetime === "off" && planResult) hintNote = "Hint is from an earlier position";
+    else setPlans(null);
+    if (lifetime === "auto-refresh" && !result && !showSolution()) resumeFromHint();
+  }
+
+  const { main, extras } = lockLabels(info);
+  if (main || extras.length) flash(main ?? extras.shift()!, extras);
+  if (result) onDrillResult(result);
+}
+
+function onDrillResult(r: DrillResult): void {
+  input.releaseAll();
+  hintPaused = false;
+  setPlans(null);
+  session.setPaused(true);
+  if (r.status === "passed" && settings.value.drill.autoAdvance) {
+    advanceTimer = window.setTimeout(() => void loadNextDrill(), r.notes.length ? 2600 : 1200);
+  }
+}
+
+const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+let lastDrillOverlay = "";
+function renderDrillOverlay(): void {
+  const kb = settings.value.keybinds;
+  const k = (a: Action) => (kb[a][0] ? `<kbd>${esc(formatBinding(kb[a][0]!))}</kbd>` : "");
+  let html: string;
+  if (drillLoading) html = `<div class="title">Building a drill…</div>`;
+  else if (drillError) html = `<div class="title">${esc(drillError)}</div><div class="muted">${k("nextDrill")} try again · ${k("openSettings")} settings</div>`;
+  else {
+    const r = drill.result!;
+    const pass = r.status === "passed";
+    const auto = pass && settings.value.drill.autoAdvance;
+    html =
+      `<div class="title ${pass ? "pass" : "fail"}">${pass ? "✓ " : "✗ "}${esc(r.headline)}</div>` +
+      r.notes.map((n) => `<div class="note">${esc(n)}</div>`).join("") +
+      `<div class="muted keys">${k("restart")} retry · ${k("nextDrill")} ${auto ? "next (auto)" : "next"} · ${k("hint")} solution</div>`;
+  }
+  overlay.hidden = false;
+  if (html !== lastDrillOverlay) {
+    overlay.innerHTML = html;
+    lastDrillOverlay = html;
+  }
+}
+
+function renderDrillStats(): void {
+  const st = drill.stats;
+  const s = drill.scenario;
+  const pct = (p: number, n: number) => (n ? `${Math.round((100 * p) / n)}% (${p}/${n})` : "—");
+  const rows: [string, string][] = [
+    ["Drill", s ? `${s.piece}-spin` : "—"],
+    ["Pieces", s ? `${drill.placed}/${s.depth}` : "—"],
+    ["Passed", pct(st.passed, st.attempted)],
+    ["Streak", st.streak ? String(st.streak) : "—"],
+    ["Best", st.bestStreak ? String(st.bestStreak) : "—"],
+    ["Hints", String(st.hintsUsed)]
+  ];
+  if (s) {
+    const per = st.byPiece[s.piece];
+    rows.splice(3, 0, [`${s.piece} rate`, pct(per.passed, per.attempted)]);
+  }
+  const html = rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join("");
+  if (html !== lastStats) {
+    statsEl.innerHTML = html;
+    lastStats = html;
+  }
+}
+
+function renderDrillBar(): void {
+  if (!inDrill()) return;
+  const d = settings.value.drill;
+  const s = drill.scenario;
+  const info = drillLoading ? "Building…" : s ? `Place ${s.depth} piece${s.depth > 1 ? "s" : ""}, end with ${s.piece === "I" || s.piece === "L" || s.piece === "S" ? "an" : "a"} ${s.piece}-spin` : "";
+  drillBar.set(d.piece, d.depth, info);
+}
+
+$("mode-free").addEventListener("click", blurAfter(() => setMode("free")));
+$("mode-drill").addEventListener("click", blurAfter(() => setMode("drill")));
+// Deep link: #drill opens spin drills.
+if (location.hash === "#drill" && !inDrill()) setMode("drill");
+// Initial mode: the dev #board= position is free play only.
+else if (inDrill()) applyMode();
+else {
+  $("mode-free").classList.add("active");
+  $("mode-free").setAttribute("aria-pressed", "true");
+  $("mode-drill").setAttribute("aria-pressed", "false");
+}
+
 function frame(now: number): void {
   session.advance(now);
   const e = session.engine;
@@ -540,6 +821,7 @@ function frame(now: number): void {
   hold.draw([e.held], e.holdLocked);
   queue.draw(e.queue.slice(0, PREVIEWS));
   if (mirrorDirty) renderMirror();
+  renderDrillBar();
   renderStats();
   renderOverlay();
   requestAnimationFrame(frame);

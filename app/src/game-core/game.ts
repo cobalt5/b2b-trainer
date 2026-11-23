@@ -13,6 +13,7 @@
 import { Engine, type EngineSnapshot, type LockRes } from "@haelp/teto/engine";
 import type { Game as TetoGame } from "@haelp/teto/types";
 
+import { applyScenario, type Scenario } from "../drill/scenario";
 import { FRAME_MS, toEngineHandling, type HandlingSettings } from "../ui/settings";
 import { classifyLock, type LockInfo } from "./clear";
 import type { KeyEvent } from "./input";
@@ -39,6 +40,8 @@ export interface LockEvent {
 
 type Listener<T> = (v: T) => void;
 
+export type ResetKind = "restart" | "undo" | "redo" | "scenario";
+
 /** Max frames simulated per advance() before we drop time (e.g. tab was hidden). */
 const MAX_CATCHUP_FRAMES = 10;
 
@@ -53,12 +56,14 @@ export class GameSession {
   #pending: KeyEvent[] = [];
   #lockQueue: LockEvent[] = [];
   #lockListeners = new Set<Listener<LockEvent>>();
-  #resetListeners = new Set<Listener<"restart" | "undo" | "redo">>();
+  #resetListeners = new Set<Listener<ResetKind>>();
   #placed: [number, number][] = [];
   #garbage: GarbageSettings;
   /** Engine frame at which the next garbage event is sent (garbage practice). */
   #nextGarbageFrame = 0;
   #garbageId = 0;
+  /** A spin drill is loaded: garbage practice is off until the next restart(). */
+  #scenario = false;
 
   constructor(private handling: HandlingSettings, seed?: number, garbage: GarbageSettings = NO_GARBAGE) {
     this.#garbage = { ...garbage };
@@ -69,7 +74,28 @@ export class GameSession {
 
   restart(seed: number = randomSeed()): void {
     this.seed = seed;
-    this.engine = new Engine(buildEngineParams(seed, toEngineHandling(this.handling), this.#garbage.mode));
+    this.#scenario = false;
+    this.#start(new Engine(buildEngineParams(seed, toEngineHandling(this.handling), this.#garbage.mode)), "restart");
+  }
+
+  /**
+   * Start a spin drill: its board, hold and previews, no garbage, and
+   * optionally no gravity (pieces lock on hard drop).
+   */
+  loadScenario(s: Scenario, opts: { gravity: boolean }): void {
+    this.seed = s.seed;
+    this.#scenario = true;
+    const e = new Engine(buildEngineParams(s.seed, toEngineHandling(this.handling), "off", { gravity: opts.gravity }));
+    applyScenario(e, s);
+    this.#start(e, "scenario");
+  }
+
+  get inScenario(): boolean {
+    return this.#scenario;
+  }
+
+  #start(engine: Engine, kind: ResetKind): void {
+    this.engine = engine;
     this.engine.events.on("falling.lock", (res) => this.#onLock(res));
     this.#capturePlacements();
     this.#scheduleGarbage();
@@ -77,7 +103,7 @@ export class GameSession {
     this.#pending = [];
     this.#lockQueue = [];
     this.#clockStarted = false;
-    this.#emitReset("restart");
+    this.#emitReset(kind);
   }
 
   undo(): boolean {
@@ -133,7 +159,7 @@ export class GameSession {
 
   /** Seconds of play until the next garbage event, or null with garbage off. */
   get nextGarbageIn(): number | null {
-    if (this.#garbage.mode === "off") return null;
+    if (this.#garbage.mode === "off" || this.#scenario) return null;
     return Math.max(0, (this.#nextGarbageFrame - this.engine.frame) / 60);
   }
 
@@ -212,7 +238,7 @@ export class GameSession {
    */
   #maybeSendGarbage(): void {
     const g = this.#garbage;
-    if (g.mode === "off" || this.over || this.engine.frame < this.#nextGarbageFrame) return;
+    if (g.mode === "off" || this.#scenario || this.over || this.engine.frame < this.#nextGarbageFrame) return;
     this.engine.receiveGarbage({
       frame: this.engine.frame,
       amount: g.amount,
@@ -242,7 +268,7 @@ export class GameSession {
     return () => this.#lockListeners.delete(fn);
   }
 
-  onReset(fn: Listener<"restart" | "undo" | "redo">): () => void {
+  onReset(fn: Listener<ResetKind>): () => void {
     this.#resetListeners.add(fn);
     return () => this.#resetListeners.delete(fn);
   }
@@ -262,7 +288,7 @@ export class GameSession {
     for (const ev of q) for (const l of this.#lockListeners) l(ev);
   }
 
-  #emitReset(kind: "restart" | "undo" | "redo"): void {
+  #emitReset(kind: ResetKind): void {
     for (const l of this.#resetListeners) l(kind);
   }
 }

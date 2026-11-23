@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { generateDrill } from "../src/drill/generate";
+import { rowsFromGrid } from "../src/drill/scenario";
 import { GameSession, type LockEvent } from "../src/game-core/game";
 import { DEFAULT_SETTINGS, FRAME_MS, type HandlingSettings } from "../src/ui/settings";
 
@@ -145,5 +147,56 @@ describe("GameSession practice", () => {
     const f = s.engine.frame;
     tap("moveLeft");
     expect(s.engine.frame).toBe(f);
+  });
+});
+
+describe("GameSession spin drills (M8)", () => {
+  const scenario = () => {
+    const s = generateDrill({ piece: "T", depth: 3, seed: 5 });
+    if (!s) throw new Error("no drill");
+    return s;
+  };
+
+  it("loadScenario sets up the drill's board, piece and previews", () => {
+    const { s } = setup(H(), 7);
+    const resets: string[] = [];
+    s.onReset((k) => resets.push(k));
+    const d = scenario();
+    s.loadScenario(d, { gravity: false });
+    expect(resets).toEqual(["scenario"]);
+    expect(s.inScenario).toBe(true);
+    expect(s.engine.falling.symbol).toBe(d.current);
+    expect(s.engine.held).toBe(d.hold);
+    expect(s.engine.queue.slice(0, d.queue.length)).toEqual(d.queue);
+    expect(rowsFromGrid(s.engine.board.state.map((r) => r.map(Boolean)))).toEqual(d.rows);
+    expect(s.nextGarbageIn).toBeNull();
+    s.restart(7);
+    expect(s.inScenario).toBe(false);
+  });
+
+  it("without gravity a piece never falls or locks by itself", () => {
+    const t = setup(H(), 7);
+    t.s.loadScenario(scenario(), { gravity: false });
+    const y0 = t.s.engine.falling.location[1];
+    for (let i = 0; i < 60 * 5; i++) t.run(1);
+    expect(t.locks).toHaveLength(0);
+    expect(t.s.engine.falling.location[1]).toBe(y0);
+    // Holding soft drop on the floor doesn't lock either.
+    t.key("softDrop", true);
+    for (let i = 0; i < 60 * 5; i++) t.run(1);
+    t.key("softDrop", false);
+    t.run(1);
+    expect(t.locks).toHaveLength(0);
+    expect(t.s.engine.falling.location[1]).toBeLessThan(y0);
+    t.tap("hardDrop");
+    expect(t.locks).toHaveLength(1);
+  });
+
+  it("with gravity the drill piece falls", () => {
+    const t = setup(H(), 7);
+    t.s.loadScenario(scenario(), { gravity: true });
+    const y0 = t.s.engine.falling.location[1];
+    for (let i = 0; i < 60 * 3; i++) t.run(1);
+    expect(t.s.engine.falling.location[1]).toBeLessThan(y0);
   });
 });

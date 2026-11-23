@@ -105,7 +105,7 @@ type LineOutcome =
   | { kind: "plan"; plan: Plan }
   | { kind: "breaks" | "exhausted" | "rejected"; firstStep: HintStep | null };
 
-function toStep(placement: Placement, info: LockInfo, inputs: HintStep["inputs"], usedHold: boolean): HintStep {
+export function toStep(placement: Placement, info: LockInfo, inputs: HintStep["inputs"], usedHold: boolean): HintStep {
   return {
     placement,
     cells: sbpCells(placement.location),

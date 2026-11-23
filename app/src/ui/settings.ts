@@ -9,6 +9,7 @@
 
 import type { Game } from "@haelp/teto/types";
 
+import { MAX_DEPTH, type DrillChoice } from "../drill/scenario";
 import type { PlanStrategy } from "../planner/plan";
 
 export const FRAME_MS = 1000 / 60;
@@ -39,7 +40,9 @@ export const APP_ACTIONS = [
   "undo",
   "redo",
   "pause",
-  "openSettings"
+  "openSettings",
+  "nextDrill",
+  "toggleMode"
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 
@@ -62,7 +65,9 @@ export const ACTION_LABELS: Record<Action, string> = {
   undo: "Undo",
   redo: "Redo",
   pause: "Pause",
-  openSettings: "Settings"
+  openSettings: "Settings",
+  nextDrill: "Next drill",
+  toggleMode: "Free play / drills"
 };
 
 /**
@@ -124,18 +129,38 @@ export interface PracticeSettings {
   garbageInterval: number;
 }
 
+export type AppMode = "free" | "drill";
+export type { DrillChoice };
+
+export interface DrillSettings {
+  piece: DrillChoice;
+  /** Pieces to place per drill, the spin included (1–7). */
+  depth: number;
+  /** Normal gravity and lock delay; off = pieces lock on hard drop. */
+  gravity: boolean;
+  /** Load the next drill shortly after a pass. */
+  autoAdvance: boolean;
+  /** Garbage rows under the stack: up to this many (0–4). */
+  maxGarbageRows: number;
+  /** null = random drills; otherwise a fixed sequence. */
+  seed: number | null;
+}
+
 export interface Settings {
   version: 1;
+  mode: AppMode;
   handling: HandlingSettings;
   keybinds: Keybinds;
   hint: HintSettings;
   practice: PracticeSettings;
+  drill: DrillSettings;
 }
 
 // ---------------------------------------------------------------- defaults
 
 export const DEFAULT_SETTINGS: Settings = {
   version: 1,
+  mode: "free",
   handling: {
     das: 10, // 167 ms
     arr: 2, // 33 ms
@@ -162,7 +187,9 @@ export const DEFAULT_SETTINGS: Settings = {
     undo: ["Ctrl+KeyZ"],
     redo: ["Ctrl+KeyY", "Ctrl+Shift+KeyZ"],
     pause: ["Escape"],
-    openSettings: ["F1"]
+    openSettings: ["F1"],
+    nextDrill: ["KeyN"],
+    toggleMode: ["F2"]
   },
   hint: {
     lifetime: "clear",
@@ -178,6 +205,14 @@ export const DEFAULT_SETTINGS: Settings = {
     garbage: "off",
     garbageAmount: 4,
     garbageInterval: 10
+  },
+  drill: {
+    piece: "T",
+    depth: 1,
+    gravity: false,
+    autoAdvance: true,
+    maxGarbageRows: 2,
+    seed: null
   }
 };
 
@@ -357,6 +392,7 @@ export function sanitizeSettings(raw: unknown): Settings {
   const h = (r.handling ?? {}) as Record<string, unknown>;
   const hint = (r.hint ?? {}) as Record<string, unknown>;
   const pr = (r.practice ?? {}) as Record<string, unknown>;
+  const dr = (r.drill ?? {}) as Record<string, unknown>;
   const kb = (r.keybinds ?? {}) as Record<string, unknown>;
   const L = HANDLING_LIMITS;
   const irsOpts = ["off", "hold", "tap"] as const;
@@ -372,6 +408,7 @@ export function sanitizeSettings(raw: unknown): Settings {
 
   return {
     version: 1,
+    mode: oneOf(r.mode, ["free", "drill"] as const, d.mode),
     handling: {
       das: clamp(num(h.das, d.handling.das), L.das.min, L.das.max),
       arr: clamp(num(h.arr, d.handling.arr), L.arr.min, L.arr.max),
@@ -399,6 +436,14 @@ export function sanitizeSettings(raw: unknown): Settings {
       garbage: oneOf(pr.garbage, ["off", "clean", "cheese"] as const, d.practice.garbage),
       garbageAmount: Math.round(clamp(num(pr.garbageAmount, d.practice.garbageAmount), 1, 20)),
       garbageInterval: clamp(num(pr.garbageInterval, d.practice.garbageInterval), 1, 120)
+    },
+    drill: {
+      piece: oneOf(dr.piece, ["T", "L", "J", "S", "Z", "I", "mixed"] as const, d.drill.piece),
+      depth: Math.round(clamp(num(dr.depth, d.drill.depth), 1, MAX_DEPTH)),
+      gravity: bool(dr.gravity, d.drill.gravity),
+      autoAdvance: bool(dr.autoAdvance, d.drill.autoAdvance),
+      maxGarbageRows: Math.round(clamp(num(dr.maxGarbageRows, d.drill.maxGarbageRows), 0, 4)),
+      seed: dr.seed === null || dr.seed === undefined ? null : Math.max(0, Math.trunc(num(dr.seed, 0)))
     }
   };
 }

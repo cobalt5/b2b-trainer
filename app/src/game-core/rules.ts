@@ -29,7 +29,20 @@ export function garbageMessiness(mode: GarbageMode): EngineInitializeParams["gar
     : { change: 1, within: 0, nosame: true, timeout: 0, center: false };
 }
 
-export function buildEngineParams(seed: number, handling: Game.Handling, garbage: GarbageMode = "off"): EngineInitializeParams {
+/** Lock delay with gravity off: an hour of frames, i.e. never in practice. */
+const NO_GRAVITY_LOCK_FRAMES = 60 * 60 * 60;
+
+export interface EngineParamOptions {
+  /**
+   * false = no gravity (spin drills): the piece only falls on soft drop and
+   * only locks on hard drop (lock delay is effectively off and lock resets
+   * are unlimited, so holding soft drop or fiddling with a spin never locks).
+   */
+  gravity?: boolean;
+}
+
+export function buildEngineParams(seed: number, handling: Game.Handling, garbage: GarbageMode = "off", opts: EngineParamOptions = {}): EngineInitializeParams {
+  const gravity = opts.gravity ?? true;
   return {
     board: { width: BOARD_WIDTH, height: BOARD_HEIGHT, buffer: BOARD_BUFFER },
     kickTable: "SRS+",
@@ -54,13 +67,13 @@ export function buildEngineParams(seed: number, handling: Game.Handling, garbage
       openerPhase: 0,
       specialBonus: false
     },
-    gravity: { value: 0.02, increase: 0, marginTime: 0 },
+    gravity: { value: gravity ? 0.02 : 0, increase: 0, marginTime: 0 },
     handling,
     // Surge: B2B charges from 4 and releases on break (TETR.IO defaults).
     b2b: { chaining: false, charging: { at: 4, base: 3 } },
     pc: { garbage: 10, b2b: 1 },
     misc: {
-      movement: { infinite: false, lockResets: 15, lockTime: 30, may20G: true },
+      movement: { infinite: !gravity, lockResets: 15, lockTime: gravity ? 30 : NO_GRAVITY_LOCK_FRAMES, may20G: true },
       allowed: { spin180: true, hardDrop: true, hold: true, undo: true, retry: true },
       infiniteHold: false,
       stride: false

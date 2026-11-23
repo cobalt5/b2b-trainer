@@ -140,3 +140,19 @@ describe("hint strategy migration (M6)", () => {
     expect(s.hint.beamWidth).toBe(5000);
   });
 });
+
+describe("drill settings (M8)", () => {
+  it("profiles saved before drills get drill defaults and free play", () => {
+    const { mode: _m, drill: _d, ...old } = structuredClone(DEFAULT_SETTINGS);
+    const s = sanitizeSettings(old);
+    expect(s.mode).toBe("free");
+    expect(s.drill).toEqual(DEFAULT_SETTINGS.drill);
+    expect(s.keybinds.nextDrill).toEqual(["KeyN"]);
+  });
+  it("clamps and validates drill values", () => {
+    const s = sanitizeSettings({ mode: "drill", drill: { piece: "O", depth: 12, gravity: "yes", maxGarbageRows: -3, seed: 7.9 } });
+    expect(s.mode).toBe("drill");
+    expect(s.drill).toEqual({ ...DEFAULT_SETTINGS.drill, depth: 7, maxGarbageRows: 0, seed: 7 });
+    expect(sanitizeSettings({ drill: { piece: "mixed", depth: 0 } }).drill).toMatchObject({ piece: "mixed", depth: 1 });
+  });
+});

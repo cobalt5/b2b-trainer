@@ -15,6 +15,8 @@ import {
   rebind,
   unbind,
   type Action,
+  type DrillChoice,
+  type DrillSettings,
   type GarbageMode,
   type HandlingSettings,
   type HintLifetime,
@@ -24,9 +26,26 @@ import {
   type SettingsStore
 } from "./settings";
 
-export type SettingsTab = "handling" | "controls" | "hints" | "practice";
-export const SETTINGS_TABS: readonly SettingsTab[] = ["handling", "controls", "hints", "practice"];
-const TAB_LABELS: Record<SettingsTab, string> = { handling: "Handling", controls: "Controls", hints: "Hints", practice: "Practice" };
+export type SettingsTab = "handling" | "controls" | "hints" | "practice" | "drills";
+export const SETTINGS_TABS: readonly SettingsTab[] = ["handling", "controls", "hints", "practice", "drills"];
+const TAB_LABELS: Record<SettingsTab, string> = { handling: "Handling", controls: "Controls", hints: "Hints", practice: "Practice", drills: "Drills" };
+
+export const DRILL_CHOICE_LABELS: readonly (readonly [DrillChoice, string])[] = [
+  ["T", "T-spins"],
+  ["L", "L-spins"],
+  ["J", "J-spins"],
+  ["S", "S-spins"],
+  ["Z", "Z-spins"],
+  ["I", "I-spins"],
+  ["mixed", "Mixed"]
+];
+
+/** Depth labels: 1 = only the spin piece; 7 = every known piece, hold included. */
+export function depthLabel(d: number): string {
+  if (d === 1) return "1 · spin only";
+  if (d === 7) return "7 · uses hold";
+  return `${d} · ${d - 1} setup piece${d > 2 ? "s" : ""}`;
+}
 
 /** One labelled row of the hints / practice forms. */
 function formRow(label: string, hint: string, control: HTMLElement, id: string): HTMLElement[] {
@@ -157,7 +176,13 @@ export class SettingsModal {
     for (const b of this.dialog.querySelectorAll<HTMLButtonElement>(".tabs button")) {
       b.classList.toggle("active", b.dataset.tab === this.#tab);
     }
-    const body = { handling: () => this.#renderHandling(), controls: () => this.#renderControls(), hints: () => this.#renderHints(), practice: () => this.#renderPractice() };
+    const body = {
+      handling: () => this.#renderHandling(),
+      controls: () => this.#renderControls(),
+      hints: () => this.#renderHints(),
+      practice: () => this.#renderPractice(),
+      drills: () => this.#renderDrills()
+    };
     this.#body.replaceChildren(body[this.#tab]());
   }
 
@@ -287,6 +312,52 @@ export class SettingsModal {
       this.render();
     });
     return el("div", {}, form, garbageOff ? "" : note, el("div", { class: "row-actions" }, reset));
+  }
+
+  // ------------------------------------------------------------ drills
+
+  #setDrill<K extends keyof DrillSettings>(key: K, v: DrillSettings[K]): DrillSettings[K] {
+    this.store.update((s) => ({ ...s, drill: { ...s.drill, [key]: v } }));
+    return this.store.value.drill[key];
+  }
+
+  #renderDrills(): HTMLElement {
+    const d = this.store.value.drill;
+    const form = el("div", { class: "form" });
+
+    const seed = el("input", { type: "number", step: "1", min: "0", placeholder: "random", value: d.seed === null ? "" : String(d.seed), class: "num" });
+    seed.addEventListener("change", () => {
+      const raw = seed.value.trim();
+      const v = raw === "" ? null : Number(raw);
+      const kept = this.#setDrill("seed", v === null || !Number.isFinite(v) ? null : Math.max(0, Math.trunc(v)));
+      seed.value = kept === null ? "" : String(kept);
+    });
+
+    const depths = Array.from({ length: 7 }, (_, i) => [String(i + 1), depthLabel(i + 1)] as const);
+    form.append(
+      ...formRow("Spin", "Which piece the drills end with a spin of", selectOf<DrillChoice>(DRILL_CHOICE_LABELS, d.piece, (v) => this.#setDrill("piece", v)), "set-drill-piece"),
+      ...formRow(
+        "Pieces to place",
+        "1 = the slot is ready. More = build the setup first with the pieces in your queue. 7 also uses the hold piece",
+        selectOf(depths, String(d.depth), (v) => this.#setDrill("depth", Number(v))),
+        "set-drill-depth"
+      ),
+      ...formRow("Gravity", "Off: pieces only fall when you soft drop, and lock on hard drop", checkboxOf(d.gravity, (v) => this.#setDrill("gravity", v)), "set-drill-gravity"),
+      ...formRow("Auto-advance", "Load the next drill shortly after a pass", checkboxOf(d.autoAdvance, (v) => this.#setDrill("autoAdvance", v)), "set-drill-auto"),
+      ...formRow("Garbage rows", "Up to this many garbage rows under the stack (0–4)", numberOf(d.maxGarbageRows, { min: 0, max: 4, step: 1 }, (v) => this.#setDrill("maxGarbageRows", v)), "set-drill-garbage"),
+      ...formRow("Seed", "Fixed drill sequence. Empty = random drills", seed, "set-drill-seed")
+    );
+
+    const note = el("p", {
+      class: "muted small",
+      textContent: "Any line-clearing spin of the chosen piece passes. The hint key shows the generated solution; a better spin you missed is pointed out after the drill."
+    });
+    const reset = el("button", { type: "button", class: "secondary", textContent: "Reset drills" });
+    reset.addEventListener("click", () => {
+      this.store.reset("drill");
+      this.render();
+    });
+    return el("div", {}, form, note, el("div", { class: "row-actions" }, reset));
   }
 
   // ------------------------------------------------------------ handling

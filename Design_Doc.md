@@ -163,6 +163,7 @@ Check the exact SBP field shapes against `spec/sbp-1.md` in github.com/ruelalarc
 6. **M5 Plan (strategy A):** top-N + PV in the fork; numbered outlines up to the next B2B clear.
 7. **M6 Plan (strategy B):** `b2b_plan` extension in Rust; cycle through top 3.
 8. **M7 Polish:** stats, settings, garbage practice, auto-refresh hints, optional Tauri packaging.
+9. **M8 Spin drills:** generated positions that end in a spin of a chosen piece (section 13).
 
 ## 10. Testing and acceptance
 
@@ -189,3 +190,33 @@ Check the exact SBP field shapes against `spec/sbp-1.md` in github.com/ruelalarc
 - Minorail: https://github.com/ruelalarcon/minorail
 - Cold Clear 2 (reference only): https://github.com/MinusKelvin/cold-clear-2
 - TETR.IO mechanics: https://tetris.wiki/TETR.IO
+
+## 13. Spin drills (M8)
+
+A second mode next to free play. The app generates a position, and the user places a set number of pieces, the last of which must be a line-clearing spin of the chosen piece.
+
+**Options** (drill bar and Settings → Drills):
+
+- Piece: T, L, J, S, Z, I, or Mixed.
+- Pieces to place, 1–7, spin included. 1 means the slot is ready. 2–6 means the setup is built first from the current piece and previews. 7 also uses the hold piece: one needed piece starts in hold, so hold has to be used.
+- Gravity, off by default. With gravity off, pieces fall only on soft drop and lock only on hard drop.
+- Auto-advance after a pass, garbage rows under the stack (0–4), and a fixed seed.
+
+**Generation** (`app/src/drill/generate.ts`), with Triangle as the source of truth throughout:
+
+1. A hand-made spin core (`drill/templates.ts`) is placed at a random column. The other columns are filled to a set height, with bumps on top, and garbage rows may go underneath. Z and J use the S and L cores flipped. T and I cores are flipped at random.
+2. A BFS over `press()` finds every line-clearing spin the piece can reach. Each one is replayed with a real hard drop, and the best one becomes the finish.
+3. For depth d, d−1 pieces are taken back off the board one at a time. Each is a tetromino-shaped group of filled cells whose piece can reach exactly those cells once they are removed, and whose removal leaves nothing floating. Groups near the slot are preferred, and so are groups the spin depends on. Removing cells never creates a full row, so only the last step clears lines and every outline stays in the start board's coordinates.
+4. The whole line is replayed forward from the start position with `verifyPlacement`. That replay produces the hint steps, and any board that fails it is thrown away.
+
+Generation runs in a web worker, and the next drill is prepared while the current one is played. Depth 1 takes about 10 ms. Depth 7 takes about 0.2–0.5 s (median), under about 1 s worst case.
+
+**Grading** (`drill/drill.ts`):
+
+- **Pass:** any line-clearing spin of the piece within d pieces. The user is told if a better spin was reachable from the position they spun from, or if the generated line reaches a better clear.
+- **Fail:** any other line clear, a top out, or d pieces placed without the spin.
+- **Stats:** pass rate overall and per piece, current and best streak, and hints used.
+
+**Hint:** the hint key shows the generated solution on the mirror as numbered outlines. It works without the bot. Hint settings (full plan or step 1, lifetime, pause while shown) apply as in free play. After a drill ends, the hint key restarts it with the solution shown. If the user leaves the generated line, the hint says to retry.
+
+**Keys:** `N` next drill, `R` retry, `F2` switch between free play and drills. Undo works within a running drill. Redo is off in drills.

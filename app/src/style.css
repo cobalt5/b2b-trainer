@@ -127,9 +127,11 @@ kbd {
 }
 .panel canvas { display: block; margin: 0 auto; }
 .panel.highlight { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
-.stats dl { display: grid; grid-template-columns: auto auto; gap: 2px 16px; margin: 0; }
-.stats dt { color: var(--muted); }
-.stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+/* Fixed width so the column doesn't grow as values get longer (e.g. "Passed 100% (999/999)"). */
+.panel.stats { width: 16em; box-sizing: border-box; }
+.stats dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 16px; margin: 0; }
+.stats dt { color: var(--muted); white-space: nowrap; }
+.stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 body.stacked .stage { flex-direction: column; align-items: center; }
 
 /* clear label */
@@ -257,3 +259,28 @@ button.bind.capturing { border-color: var(--accent); color: var(--accent); anima
   .handling .readout { grid-column: span 2; margin-top: -6px; }
   .form { grid-template-columns: 1fr; gap: 6px; }
 }
+
+/* segmented buttons (mode switch, drill piece picker) */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; padding: 2px; gap: 2px; background: var(--panel); }
+.seg button { background: transparent; color: var(--muted); padding: 4px 10px; border-radius: 5px; }
+.seg button.active { background: var(--accent); color: var(--accent-fg); }
+.seg button[class*="mino-"] { font-weight: 700; min-width: 32px; }
+.seg button.mino-t:not(.active) { color: #b05ad8; }
+.seg button.mino-l:not(.active) { color: #f29a38; }
+.seg button.mino-j:not(.active) { color: #4b6cf0; }
+.seg button.mino-s:not(.active) { color: #6cc268; }
+.seg button.mino-z:not(.active) { color: #ec5a62; }
+.seg button.mino-i:not(.active) { color: #3ec7e0; }
+
+/* spin drills */
+.drill-bar { display: flex; align-items: center; gap: 14px; height: 44px; flex-wrap: wrap; }
+.drill-bar[hidden] { display: none; }
+.drill-bar .depth { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.drill-bar select { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+.drill-bar .drill-info { font-size: 13px; }
+.drill-bar .spacer { flex: 1; }
+.state-overlay .title.pass { color: #7fd88f; }
+.state-overlay .title.fail { color: #f08a8a; }
+.state-overlay .title { text-align: center; padding: 0 12px; }
+.state-overlay .note { font-size: 14px; font-weight: 600; text-align: center; padding: 0 12px; }
+.state-overlay .keys { margin-top: 6px; font-size: 13px; }
